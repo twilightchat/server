@@ -13,19 +13,14 @@ from twilightchat.types import *
 from twilightchat.token import Token
 import json
 import zlib
+import config
 from typing import Any
 
 app = Quart(__name__)
 app = cors(app)
 
 # Database configuration
-POSTGRES = {
-    "host": "localhost",
-    "user": "postgres",
-    "password": "AMP@amp1024",
-    "database": "twilightchat",
-    "port": "5432"
-}
+POSTGRES = config.POSTGRES
 
 db_pool = None  # Initialize the database connection pool
 
@@ -237,13 +232,11 @@ async def handle_heartbeat(data, websocket):
     
 async def handle_identify(data, websocket):
     """Handle identify requests from clients."""
-    
     if websocket not in connected_clients:
         await websocket.close(CLOSE_CODES['Not authenticated'])
         return
 
-    token = data.get('d', {}).get('token')  # Safely get the token
-
+    token = data.get('d', {}).get('token')
     if not token:
         await send_as_array_buffer(websocket, {
             'code': CLOSE_CODES['Not authenticated'],
@@ -260,21 +253,8 @@ async def handle_identify(data, websocket):
                 connected_clients[websocket]['authenticated'] = True
                 connected_clients[websocket]['user'] = user
 
-                # Prepare the response payload directly as OP JSON
-                response_payload = {
-                    'op': OPCODES['Dispatch'],  # Use the dispatch opcode
-                    'd': {
-                        'user': {
-                            'id': user['id'],
-                            'username': user['username'],
-                            'discriminator': user['discriminator'],
-                            'avatar': user['avatar'],
-                            'flags': user['flags'],
-                            'verified': user['verified'],
-                        },
-                    }
-                }
-                await send_as_array_buffer(websocket, response_payload)  # Correctly send as bytes
+                # Send Ready event after authentication
+                await send_ready_event(websocket, user)
             else:
                 await send_as_array_buffer(websocket, {
                     'code': CLOSE_CODES['Authentication failed'],
@@ -283,6 +263,30 @@ async def handle_identify(data, websocket):
                 await websocket.close(CLOSE_CODES['Authentication failed'])
     except Exception as e:
         print(f"Error during identify: {e}")
+            
+async def send_ready_event(websocket, user):
+    """Send the Ready event to the client."""
+    ready_payload = {
+        'op': OPCODES['Dispatch'],  # Dispatch opcode
+        't': 'READY',  # Event type
+        's': connected_clients[websocket]['sequence'],  # Sequence number
+        'd': {
+            'v': 8,  # API version
+            'user': {
+                'id': user['id'],
+                'username': user['username'],
+                'discriminator': user['discriminator'],
+                'avatar': user['avatar'],
+                'flags': user['flags'],
+                'verified': user['verified'],
+            },
+            'guilds': [],  # Add any guilds the user is a member of
+            'session_id': connected_clients[websocket]['session_id'],
+            '_trace': ["twilightchat-gateway-server"]
+        }
+    }
+    await send_as_array_buffer(websocket, ready_payload)
+    print(f"Sent Ready event to user {user['username']} with session ID {connected_clients[websocket]['session_id']}")
 
 async def handle_status_update(data, websocket):
     """Handle status update requests from clients."""
